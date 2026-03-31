@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { LandPlot, Calculator, Info, TrendingUp, IndianRupee } from "lucide-react";
+import PlotPurchaseHistoryTable from "./PlotPurchaseHistoryTable";
 
 interface CalculationResult {
   totalCost: number;
@@ -20,6 +21,28 @@ export default function PlotCalculator() {
     otherCosts: 0,
     perSqftCost: 0,
   });
+
+  type PlotPurchaseRecord = {
+    id: string;
+    area: number;
+    rate: number;
+    registrationPercent: number;
+    otherExpenses: number;
+    totalCost: number;
+    registrationCost: number;
+    otherCosts: number;
+    perSqftCost: number;
+    createdAt: string;
+  };
+
+  const [records, setRecords] = useState<PlotPurchaseRecord[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     const baseCost = area * rate;
@@ -42,9 +65,30 @@ export default function PlotCalculator() {
     }).format(val);
   };
 
+  async function refreshHistory() {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const res = await fetch("/api/plot-purchase");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Failed to fetch history");
+      setRecords(Array.isArray(json.records) ? json.records : []);
+    } catch (e: any) {
+      setHistoryError(e?.message ?? "Failed to fetch history");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refreshHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-      {/* Input Section */}
+    <div className="space-y-8">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Input Section */}
       <div className="space-y-6">
         <div className="glass p-8 rounded-3xl border border-white/10">
           <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
@@ -159,11 +203,78 @@ export default function PlotCalculator() {
             </div>
           </div>
 
-          <button className="w-full py-4 glass rounded-2xl border border-white/10 hover:bg-white/5 transition-all flex items-center justify-center gap-2 font-bold text-sm">
+          <button
+            disabled={saving}
+            onClick={async () => {
+              setSaving(true);
+              setSaveError(null);
+              setSaveSuccess(null);
+              try {
+                const res = await fetch("/api/plot-purchase/save", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    area,
+                    rate,
+                    registrationPercent,
+                    otherExpenses,
+                  }),
+                });
+                const json = await res.json();
+                if (!res.ok)
+                  throw new Error(
+                    json?.error ?? "Failed to save plot purchase",
+                  );
+                const record = json.record as PlotPurchaseRecord;
+                setSelectedId(record.id);
+                setRecords((prev) => [record, ...prev]);
+                setArea(record.area);
+                setRate(record.rate);
+                setRegistrationPercent(record.registrationPercent);
+                setOtherExpenses(record.otherExpenses);
+                setSaveSuccess("Saved to Google Sheets.");
+              } catch (e: any) {
+                setSaveError(e?.message ?? "Failed to save plot purchase");
+              } finally {
+                setSaving(false);
+              }
+            }}
+            className="w-full py-4 glass rounded-2xl border border-white/10 hover:bg-white/5 transition-all flex items-center justify-center gap-2 font-bold text-sm disabled:opacity-60"
+          >
             <IndianRupee size={16} />
             Save to Google Sheets
           </button>
+
+          {saveError ? (
+            <div className="text-red-400 text-sm">{saveError}</div>
+          ) : null}
+          {saveSuccess ? (
+            <div className="text-green-400 text-sm">{saveSuccess}</div>
+          ) : null}
         </div>
+      </div>
+      </div>
+
+      <div>
+        {historyLoading ? (
+          <div className="text-sm text-gray-500">Loading saved plot purchases...</div>
+        ) : historyError ? (
+          <div className="text-red-400 text-sm">{historyError}</div>
+        ) : (
+          <PlotPurchaseHistoryTable
+            records={records}
+            selectedId={selectedId}
+            onSelect={(id) => {
+              const record = records.find((r) => r.id === id);
+              if (!record) return;
+              setSelectedId(id);
+              setArea(record.area);
+              setRate(record.rate);
+              setRegistrationPercent(record.registrationPercent);
+              setOtherExpenses(record.otherExpenses);
+            }}
+          />
+        )}
       </div>
     </div>
   );
