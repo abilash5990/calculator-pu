@@ -4,7 +4,10 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs/promises";
 import crypto from "crypto";
+<<<<<<< HEAD
 import { google } from "googleapis";
+=======
+>>>>>>> 594b173 (tesing)
 
 dotenv.config();
 
@@ -297,6 +300,10 @@ async function ensureSheetHeaders(
 }
 
 async function createSheetsClient() {
+<<<<<<< HEAD
+=======
+  const { google } = await import("googleapis");
+>>>>>>> 594b173 (tesing)
   const credentialsPath = path.join(process.cwd(), "credentials.json");
   const credentialsRaw = await fs.readFile(credentialsPath, "utf8");
   const credentials = JSON.parse(credentialsRaw) as {
