@@ -1,13 +1,10 @@
 import express from "express";
+import http from "http";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs/promises";
 import crypto from "crypto";
-<<<<<<< HEAD
-import { google } from "googleapis";
-=======
->>>>>>> 594b173 (tesing)
 
 dotenv.config();
 
@@ -300,10 +297,7 @@ async function ensureSheetHeaders(
 }
 
 async function createSheetsClient() {
-<<<<<<< HEAD
-=======
   const { google } = await import("googleapis");
->>>>>>> 594b173 (tesing)
   const credentialsPath = path.join(process.cwd(), "credentials.json");
   const credentialsRaw = await fs.readFile(credentialsPath, "utf8");
   const credentials = JSON.parse(credentialsRaw) as {
@@ -426,7 +420,7 @@ async function ensureLoanHeaders(sheets: any, spreadsheetId: string, tabName: st
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
@@ -1103,32 +1097,23 @@ async function startServer() {
     }
   });
 
-  // Start listening first so backend API is never blocked by Vite startup.
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  const httpServer = http.createServer(app);
 
-  // Vite middleware for development (initialize in background).
   if (process.env.NODE_ENV !== "production") {
-    void (async () => {
-      try {
-        const vite = await Promise.race([
-          createViteServer({
-            server: { middlewareMode: true },
-            appType: "spa",
-          }),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error("Timed out initializing Vite middleware")),
-              15000,
-            ),
-          ),
-        ]);
-        app.use(vite.middlewares);
-      } catch (e) {
-        console.error("Vite middleware init failed:", e);
-      }
-    })();
+    console.log("Initializing Vite (first run may take a minute)...");
+    try {
+      const vite = await createViteServer({
+        root: process.cwd(),
+        server: {
+          middlewareMode: true,
+          hmr: { server: httpServer },
+        },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (e) {
+      console.error("Vite middleware init failed:", e);
+    }
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
@@ -1136,6 +1121,20 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+
+  httpServer.once("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(
+        `Port ${PORT} is already in use. Stop the other dev server or set PORT=3001 in .env.`,
+      );
+      process.exit(1);
+    }
+    throw err;
+  });
+
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
 }
 
 startServer();

@@ -7,12 +7,8 @@ import {
   Settings as SettingsIcon,
   ChevronRight,
   Loader2,
-<<<<<<< HEAD
-  TrendingUp
-=======
   TrendingUp,
-  RefreshCw
->>>>>>> 594b173 (tesing)
+  RefreshCw,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { clsx, type ClassValue } from "clsx";
@@ -159,8 +155,6 @@ export default function App() {
             </div>
             <div className="flex items-center gap-4">
               <ThemeToggle />
-<<<<<<< HEAD
-=======
               <button
                 onClick={() => window.location.reload()}
                 className="p-3 glass rounded-xl hover:bg-white/5 transition-colors"
@@ -169,7 +163,6 @@ export default function App() {
               >
                 <RefreshCw size={20} />
               </button>
->>>>>>> 594b173 (tesing)
               <button className="p-3 glass rounded-xl hover:bg-white/5 transition-colors relative">
                 <Bell size={20} />
                 <span className="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full border-2 border-background"></span>
