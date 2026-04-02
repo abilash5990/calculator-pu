@@ -246,6 +246,11 @@ async function withTimeout<T>(
   ]);
 }
 
+function sheetsValues(result: unknown): any[][] {
+  const r = result as { data?: { values?: any[][] } };
+  return r.data?.values ?? [];
+}
+
 async function ensureSheetHeaders(
   sheets: any,
   spreadsheetId: string,
@@ -439,6 +444,10 @@ async function startServer() {
     res.sendStatus(200);
   });
 
+  /** Mounted at /api so GET /dashboard resolves to /api/dashboard before Vite's SPA fallback. */
+  const apiRouter = express.Router();
+  app.use("/api", apiRouter);
+
   let sheets: any | null = null;
   let spreadsheetId: string | null = null;
 
@@ -610,6 +619,422 @@ async function startServer() {
     return plotInitPromise;
   }
 
+  /** Updated whenever /api/dashboard successfully reads from Sheets (at least one tab). */
+  let lastSheetsReadAt: string | null = null;
+
+  async function fetchLoanRecordsForDashboard(): Promise<LoanRecord[]> {
+    await initLoanSheets();
+    if (!sheets || !spreadsheetId || !loanTabName) return [];
+    const result = await withTimeout(
+      sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${loanTabName}!A:H`,
+      }),
+      7000,
+      "Timed out while reading loan records from Google Sheets",
+    );
+    const rows = sheetsValues(result);
+    const records: LoanRecord[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (i === 0 && LOAN_HEADERS.every((h, idx) => String(row[idx] ?? "") === h)) {
+        continue;
+      }
+      if (row.length < 8) continue;
+      const record: LoanRecord = {
+        id: String(row[0]),
+        loanAmount: Number(row[1]),
+        interestRate: Number(row[2]),
+        tenure: Number(row[3]),
+        emi: Number(row[4]),
+        totalInterest: Number(row[5]),
+        totalPayment: Number(row[6]),
+        createdAt: String(row[7]),
+      };
+      if (!record.id) continue;
+      if (
+        ![record.loanAmount, record.interestRate, record.tenure, record.emi, record.totalInterest, record.totalPayment].every(
+          Number.isFinite,
+        )
+      ) {
+        continue;
+      }
+      records.push(record);
+    }
+    records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return records;
+  }
+
+  async function fetchITRecordsForDashboard(): Promise<ITFilingRecord[]> {
+    await initITSheets();
+    if (!sheets || !spreadsheetId || !itTabName) return [];
+    const result = await withTimeout(
+      sheets.spreadsheets.values.get({ spreadsheetId, range: `${itTabName}!A:H` }),
+      7000,
+      "Timed out while reading IT filing records from Google Sheets",
+    );
+    const rows = sheetsValues(result);
+    const records: ITFilingRecord[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (i === 0 && isHeaderRow(row, ITFILING_HEADERS)) continue;
+      if (row.length < ITFILING_HEADERS.length) continue;
+      const record: ITFilingRecord = {
+        id: String(row[0]),
+        income: Number(row[1]),
+        deductions: Number(row[2]),
+        regime: (String(row[3]) === "old" ? "old" : "new") as "old" | "new",
+        tax: Number(row[4]),
+        monthlyTax: Number(row[5]),
+        takeHomeMonthly: Number(row[6]),
+        createdAt: String(row[7]),
+      };
+      if (!record.id) continue;
+      if (record.regime !== "old" && record.regime !== "new") continue;
+      if (![record.income, record.deductions, record.tax, record.monthlyTax, record.takeHomeMonthly].every(Number.isFinite)) {
+        continue;
+      }
+      records.push(record);
+    }
+    records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return records;
+  }
+
+  async function fetchJewelRecordsForDashboard(): Promise<JewelLoanRecord[]> {
+    await initJewelSheets();
+    if (!sheets || !spreadsheetId || !jewelTabName) return [];
+    const result = await withTimeout(
+      sheets.spreadsheets.values.get({ spreadsheetId, range: `${jewelTabName}!A:J` }),
+      7000,
+      "Timed out while reading jewel loan records from Google Sheets",
+    );
+    const rows = sheetsValues(result);
+    const records: JewelLoanRecord[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (i === 0 && isHeaderRow(row, JEWEL_LOAN_HEADERS)) continue;
+      if (row.length < JEWEL_LOAN_HEADERS.length) continue;
+      const record: JewelLoanRecord = {
+        id: String(row[0]),
+        weight: Number(row[1]),
+        purity: Number(row[2]),
+        marketRate: Number(row[3]),
+        loanLTV: Number(row[4]),
+        interestRate: Number(row[5]),
+        goldValue: Number(row[6]),
+        loanAmount: Number(row[7]),
+        monthlyInterest: Number(row[8]),
+        createdAt: String(row[9]),
+      };
+      if (!record.id) continue;
+      if (
+        ![record.weight, record.purity, record.marketRate, record.loanLTV, record.interestRate, record.goldValue, record.loanAmount, record.monthlyInterest].every(
+          Number.isFinite,
+        )
+      ) {
+        continue;
+      }
+      records.push(record);
+    }
+    records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return records;
+  }
+
+  async function fetchPlotRecordsForDashboard(): Promise<PlotPurchaseRecord[]> {
+    await initPlotSheets();
+    if (!sheets || !spreadsheetId || !plotTabName) return [];
+    const result = await withTimeout(
+      sheets.spreadsheets.values.get({ spreadsheetId, range: `${plotTabName}!A:J` }),
+      7000,
+      "Timed out while reading plot purchase records from Google Sheets",
+    );
+    const rows = sheetsValues(result);
+    const records: PlotPurchaseRecord[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (i === 0 && isHeaderRow(row, PLOT_PURCHASE_HEADERS)) continue;
+      if (row.length < PLOT_PURCHASE_HEADERS.length) continue;
+      const record: PlotPurchaseRecord = {
+        id: String(row[0]),
+        area: Number(row[1]),
+        rate: Number(row[2]),
+        registrationPercent: Number(row[3]),
+        otherExpenses: Number(row[4]),
+        totalCost: Number(row[5]),
+        registrationCost: Number(row[6]),
+        otherCosts: Number(row[7]),
+        perSqftCost: Number(row[8]),
+        createdAt: String(row[9]),
+      };
+      if (!record.id) continue;
+      if (
+        ![record.area, record.rate, record.registrationPercent, record.otherExpenses, record.totalCost, record.registrationCost, record.otherCosts, record.perSqftCost].every(
+          Number.isFinite,
+        )
+      ) {
+        continue;
+      }
+      records.push(record);
+    }
+    records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return records;
+  }
+
+  apiRouter.get("/dashboard", async (_req, res) => {
+    const refreshedAt = new Date().toISOString();
+    const telegramConnected = Boolean(String(process.env.TELEGRAM_BOT_TOKEN ?? "").trim());
+
+    try {
+      await initSheetsBase();
+
+      if (!spreadsheetId || sheetsBaseError) {
+        return res.json({
+          refreshedAt,
+          lastSheetsReadAt,
+          sheetsConfigured: false,
+          sheetsError: sheetsBaseError ?? (spreadsheetId ? null : "Missing GOOGLE_SHEET_ID in environment"),
+          googleSheetsStatus: "not_configured" as const,
+          telegramStatus: telegramConnected ? ("connected" as const) : ("not_connected" as const),
+          kpis: {
+            totalLoanPrincipal: 0,
+            activeLoanCases: 0,
+            monthlyTaxEstimate: null as number | null,
+            plotRatePerSqft: null as number | null,
+            estimatedTaxFromLatestIT: null as number | null,
+          },
+          chartSeries: [] as { day: string; count: number }[],
+          activity: [] as {
+            id: string;
+            kind: "loan" | "it" | "jewel" | "plot";
+            title: string;
+            subtitle: string;
+            createdAt: string;
+          }[],
+          recentRecords: [] as {
+            id: string;
+            source: string;
+            label: string;
+            detail: string;
+            amountLabel: string;
+            status: string;
+            updatedAt: string;
+          }[],
+          moduleErrors: {} as Record<string, string>,
+        });
+      }
+
+      let loans: LoanRecord[] = [];
+      let itRecords: ITFilingRecord[] = [];
+      let jewelRecords: JewelLoanRecord[] = [];
+      let plotRecords: PlotPurchaseRecord[] = [];
+      const moduleErrors: Record<string, string> = {};
+
+      const results = await Promise.allSettled([
+        fetchLoanRecordsForDashboard(),
+        fetchITRecordsForDashboard(),
+        fetchJewelRecordsForDashboard(),
+        fetchPlotRecordsForDashboard(),
+      ]);
+
+      const labels = ["loans", "itFiling", "jewelLoan", "plotPurchase"] as const;
+      results.forEach((r, i) => {
+        if (r.status === "fulfilled") {
+          const v = r.value;
+          if (i === 0) loans = v as LoanRecord[];
+          else if (i === 1) itRecords = v as ITFilingRecord[];
+          else if (i === 2) jewelRecords = v as JewelLoanRecord[];
+          else plotRecords = v as PlotPurchaseRecord[];
+        } else {
+          moduleErrors[labels[i]] = r.reason?.message ?? "Failed to load";
+        }
+      });
+
+      lastSheetsReadAt = refreshedAt;
+
+      const totalLoanPrincipal = loans.reduce((s, l) => s + l.loanAmount, 0);
+      const activeLoanCases = loans.length;
+      const latestIT = itRecords[0];
+      const monthlyTaxEstimate = latestIT != null ? latestIT.monthlyTax : null;
+      const estimatedTaxFromLatestIT = latestIT != null ? latestIT.tax : null;
+      const latestPlot = plotRecords[0];
+      const plotRatePerSqft = latestPlot != null ? latestPlot.rate : null;
+
+      const activity: {
+        id: string;
+        kind: "loan" | "it" | "jewel" | "plot";
+        title: string;
+        subtitle: string;
+        createdAt: string;
+      }[] = [];
+
+      for (const l of loans.slice(0, 20)) {
+        activity.push({
+          id: `loan-${l.id}`,
+          kind: "loan",
+          title: "Loan calculation saved",
+          subtitle: `Principal ${l.loanAmount.toLocaleString("en-IN")} · ${l.tenure}y @ ${l.interestRate}%`,
+          createdAt: l.createdAt,
+        });
+      }
+      for (const r of itRecords.slice(0, 20)) {
+        activity.push({
+          id: `it-${r.id}`,
+          kind: "it",
+          title: "IT filing estimate saved",
+          subtitle: `${r.regime === "new" ? "New" : "Old"} regime · tax ${Math.round(r.tax).toLocaleString("en-IN")}`,
+          createdAt: r.createdAt,
+        });
+      }
+      for (const j of jewelRecords.slice(0, 20)) {
+        activity.push({
+          id: `jewel-${j.id}`,
+          kind: "jewel",
+          title: "Jewel loan calculation saved",
+          subtitle: `${j.weight}g · loan ${Math.round(j.loanAmount).toLocaleString("en-IN")}`,
+          createdAt: j.createdAt,
+        });
+      }
+      for (const p of plotRecords.slice(0, 20)) {
+        activity.push({
+          id: `plot-${p.id}`,
+          kind: "plot",
+          title: "Plot valuation saved",
+          subtitle: `${p.area} sqft · ${p.rate.toLocaleString("en-IN")}/sqft`,
+          createdAt: p.createdAt,
+        });
+      }
+
+      activity.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const activityTop = activity.slice(0, 12);
+
+      const dayKeys: string[] = [];
+      for (let d = 6; d >= 0; d--) {
+        const dt = new Date();
+        dt.setHours(0, 0, 0, 0);
+        dt.setDate(dt.getDate() - d);
+        dayKeys.push(dt.toISOString().slice(0, 10));
+      }
+      const counts = new Map<string, number>();
+      for (const k of dayKeys) counts.set(k, 0);
+
+      function bumpDay(iso: string) {
+        const t = Date.parse(iso);
+        if (Number.isNaN(t)) return;
+        const key = new Date(t).toISOString().slice(0, 10);
+        if (counts.has(key)) counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+
+      for (const l of loans) bumpDay(l.createdAt);
+      for (const r of itRecords) bumpDay(r.createdAt);
+      for (const j of jewelRecords) bumpDay(j.createdAt);
+      for (const p of plotRecords) bumpDay(p.createdAt);
+
+      const chartSeries = dayKeys.map((day) => ({
+        day,
+        count: counts.get(day) ?? 0,
+      }));
+
+      const recentRecords: {
+        id: string;
+        source: string;
+        label: string;
+        detail: string;
+        amountLabel: string;
+        status: string;
+        updatedAt: string;
+      }[] = [];
+
+      for (const l of loans.slice(0, 8)) {
+        recentRecords.push({
+          id: `loan-${l.id}`,
+          source: "Loan",
+          label: `Case ${l.id.slice(0, 8)}`,
+          detail: `${l.tenure}y · ${l.interestRate}%`,
+          amountLabel: new Intl.NumberFormat("en-IN", {
+            style: "currency",
+            currency: "INR",
+            maximumFractionDigits: 0,
+          }).format(l.loanAmount),
+          status: "Saved",
+          updatedAt: l.createdAt,
+        });
+      }
+      for (const r of itRecords.slice(0, 8)) {
+        recentRecords.push({
+          id: `it-${r.id}`,
+          source: "IT Filing",
+          label: r.regime === "new" ? "New regime" : "Old regime",
+          detail: `Income ${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(r.income)}`,
+          amountLabel: new Intl.NumberFormat("en-IN", {
+            style: "currency",
+            currency: "INR",
+            maximumFractionDigits: 0,
+          }).format(r.tax),
+          status: "Computed",
+          updatedAt: r.createdAt,
+        });
+      }
+      for (const j of jewelRecords.slice(0, 6)) {
+        recentRecords.push({
+          id: `jewel-${j.id}`,
+          source: "Jewel",
+          label: `${j.weight}g @ ${j.purity}K`,
+          detail: `LTV ${j.loanLTV}%`,
+          amountLabel: new Intl.NumberFormat("en-IN", {
+            style: "currency",
+            currency: "INR",
+            maximumFractionDigits: 0,
+          }).format(j.loanAmount),
+          status: "Saved",
+          updatedAt: j.createdAt,
+        });
+      }
+      for (const p of plotRecords.slice(0, 6)) {
+        recentRecords.push({
+          id: `plot-${p.id}`,
+          source: "Plot",
+          label: `${p.area} sqft`,
+          detail: `Total ${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(p.totalCost)}`,
+          amountLabel: `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(p.rate)}/sqft`,
+          status: "Saved",
+          updatedAt: p.createdAt,
+        });
+      }
+
+      recentRecords.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+      const googleSheetsStatus =
+        Object.keys(moduleErrors).length >= 4 ? ("error" as const) : ("synced" as const);
+
+      return res.json({
+        refreshedAt,
+        lastSheetsReadAt,
+        sheetsConfigured: true,
+        sheetsError: null as string | null,
+        googleSheetsStatus,
+        telegramStatus: telegramConnected ? ("connected" as const) : ("not_connected" as const),
+        kpis: {
+          totalLoanPrincipal,
+          activeLoanCases,
+          monthlyTaxEstimate,
+          plotRatePerSqft,
+          estimatedTaxFromLatestIT,
+        },
+        chartSeries,
+        activity: activityTop,
+        recentRecords: recentRecords.slice(0, 14),
+        moduleErrors,
+      });
+    } catch (e: any) {
+      console.error("Dashboard aggregate failed:", e);
+      return res.status(500).json({
+        error: e?.message ?? "Internal server error",
+        refreshedAt,
+        lastSheetsReadAt,
+      });
+    }
+  });
+
   app.post("/api/loans/save", async (req, res) => {
     try {
       await initLoanSheets();
@@ -693,7 +1118,7 @@ async function startServer() {
         "Timed out while reading loan records from Google Sheets",
       );
 
-      const rows = result.data.values ?? [];
+      const rows = sheetsValues(result);
       const records: LoanRecord[] = [];
 
       for (let i = 0; i < rows.length; i++) {
@@ -816,7 +1241,7 @@ async function startServer() {
         7000,
         "Timed out while reading IT filing records from Google Sheets",
       );
-      const rows = result.data.values ?? [];
+      const rows = sheetsValues(result);
       const records: ITFilingRecord[] = [];
 
       for (let i = 0; i < rows.length; i++) {
@@ -939,7 +1364,7 @@ async function startServer() {
         7000,
         "Timed out while reading jewel loan records from Google Sheets",
       );
-      const rows = result.data.values ?? [];
+      const rows = sheetsValues(result);
       const records: JewelLoanRecord[] = [];
 
       for (let i = 0; i < rows.length; i++) {
@@ -1060,7 +1485,7 @@ async function startServer() {
         7000,
         "Timed out while reading plot purchase records from Google Sheets",
       );
-      const rows = result.data.values ?? [];
+      const rows = sheetsValues(result);
       const records: PlotPurchaseRecord[] = [];
 
       for (let i = 0; i < rows.length; i++) {
@@ -1110,7 +1535,13 @@ async function startServer() {
         },
         appType: "spa",
       });
-      app.use(vite.middlewares);
+      // Never let Vite's SPA dev server answer /api/* — it returns index.html and breaks fetch().json().
+      app.use((req, res, next) => {
+        if (req.originalUrl?.startsWith("/api")) {
+          return next();
+        }
+        return vite.middlewares(req, res, next);
+      });
     } catch (e) {
       console.error("Vite middleware init failed:", e);
     }

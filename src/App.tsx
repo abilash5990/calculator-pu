@@ -15,6 +15,7 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import ThemeToggle from "./components/ThemeToggle";
 import { APP_MODULES, TabId } from "./registry";
+import { registerTabNavigation } from "./tabNav";
 
 /**
  * Utility function to merge Tailwind classes safely.
@@ -27,6 +28,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [userName, setUserName] = useState("Finance Hub User");
+
+  useEffect(() => {
+    registerTabNavigation(setActiveTab);
+  }, []);
 
   useEffect(() => {
     const savedSettings = localStorage.getItem("finance_hub_settings");
@@ -91,12 +96,12 @@ export default function App() {
                 "w-full flex items-center gap-4 p-4 rounded-2xl transition-all duration-300 group relative",
                 activeTab === item.id
                   ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20"
-                  : "hover:bg-white/5 text-gray-500 hover:text-foreground"
+                  : "hover:bg-white/5 text-slate-400 hover:text-slate-100"
               )}
             >
               <item.icon size={22} className={cn(
                 "transition-transform duration-300 group-hover:scale-110",
-                activeTab === item.id ? "text-white" : "text-gray-400 group-hover:text-blue-500"
+                activeTab === item.id ? "text-white" : "text-slate-400 group-hover:text-blue-400"
               )} />
               {isSidebarOpen && (
                 <motion.span
@@ -124,12 +129,12 @@ export default function App() {
               "w-full flex items-center gap-4 p-4 rounded-2xl transition-all duration-300 group",
               activeTab === "settings"
                 ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20"
-                : "hover:bg-white/5 text-gray-500 hover:text-foreground"
+                : "hover:bg-white/5 text-slate-400 hover:text-slate-100"
             )}
           >
             <SettingsIcon size={22} className={cn(
               "transition-transform duration-300 group-hover:rotate-90",
-              activeTab === "settings" ? "text-white" : "text-gray-400"
+              activeTab === "settings" ? "text-white" : "text-slate-400"
             )} />
             {isSidebarOpen && <span className="font-medium">Settings</span>}
           </button>
@@ -138,45 +143,51 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 relative overflow-y-auto z-10">
-        <header className="flex items-center justify-between p-8 sticky top-0 z-40 glass border-b border-white/5 backdrop-blur-xl">
+        <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between p-6 md:p-8 sticky top-0 z-40 glass border-b border-white/5 backdrop-blur-xl">
           <div>
-            <h2 className="text-3xl font-bold tracking-tight mb-1">{activeModule.label}</h2>
-            <p className="text-gray-500 text-sm">{activeModule.description}</p>
+            <h2 className="text-4xl font-bold tracking-tight mb-1">{activeModule.label}</h2>
+            <p className="text-slate-500 dark:text-slate-400 text-sm">{activeModule.description}</p>
           </div>
 
-          <div className="flex items-center gap-6">
-            <div className="hidden md:flex items-center gap-3 px-4 py-2 bg-white/5 rounded-xl border border-white/5">
-              <Search size={18} className="text-gray-500" />
+          <div className="flex flex-wrap items-center gap-3 md:gap-4">
+            <div className="flex flex-1 min-w-0 md:min-w-[280px] md:max-w-md items-center gap-3 px-4 py-2.5 bg-white/8 dark:bg-white/5 rounded-xl border border-white/10">
+              <Search size={18} className="text-slate-500 shrink-0" />
               <input
                 type="text"
                 placeholder="Search analytics..."
-                className="bg-transparent border-none focus:ring-0 text-sm w-48"
+                className="bg-transparent border-none focus:ring-0 text-sm w-full min-w-0 placeholder:text-slate-500"
               />
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 md:gap-3">
               <ThemeToggle />
               <button
+                type="button"
                 onClick={() => window.location.reload()}
-                className="p-3 glass rounded-xl hover:bg-white/5 transition-colors"
+                className="h-10 w-10 inline-flex items-center justify-center glass rounded-xl border border-white/10 hover:bg-white/5 transition-colors active:scale-[0.98]"
                 title="Refresh App"
                 aria-label="Refresh App"
               >
-                <RefreshCw size={20} />
+                <RefreshCw size={18} />
               </button>
-              <button className="p-3 glass rounded-xl hover:bg-white/5 transition-colors relative">
-                <Bell size={20} />
-                <span className="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full border-2 border-background"></span>
+              <button
+                type="button"
+                className="h-10 w-10 inline-flex items-center justify-center glass rounded-xl border border-white/10 hover:bg-white/5 transition-colors relative active:scale-[0.98]"
+                aria-label="Notifications"
+              >
+                <Bell size={18} />
+                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-blue-500 rounded-full ring-2 ring-[var(--glass-bg)]" />
               </button>
               <button 
+                type="button"
                 onClick={() => setActiveTab("settings")}
-                className="flex items-center gap-3 p-2 pl-4 glass rounded-2xl hover:bg-white/5 transition-all group"
+                className="flex items-center gap-2 pl-3 pr-2 py-1.5 glass rounded-xl border border-white/10 hover:bg-white/5 transition-all group active:scale-[0.98]"
               >
                 <div className="text-right hidden sm:block">
                   <div className="text-sm font-bold leading-none">{userName}</div>
-                  <div className="text-[10px] text-blue-500 font-bold uppercase tracking-widest mt-1">Pro Member</div>
+                  <div className="text-[10px] text-blue-500 font-bold uppercase tracking-widest mt-0.5">Pro Member</div>
                 </div>
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 p-[2px]">
-                  <div className="w-full h-full rounded-[10px] bg-background flex items-center justify-center font-bold text-blue-500 group-hover:bg-transparent group-hover:text-white transition-all">
+                <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 p-[2px]">
+                  <div className="w-full h-full rounded-[6px] bg-background flex items-center justify-center text-sm font-bold text-blue-500 group-hover:bg-transparent group-hover:text-white transition-all">
                     {userName.charAt(0)}
                   </div>
                 </div>
@@ -185,7 +196,7 @@ export default function App() {
           </div>
         </header>
 
-        <div className="p-8 max-w-7xl mx-auto">
+        <div className="p-6 max-w-7xl mx-auto">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -194,7 +205,7 @@ export default function App() {
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
               className={cn(
-                "grid gap-8",
+                "grid gap-6",
                 activeModule.isFullWidth ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-3"
               )}
             >
