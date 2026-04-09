@@ -16,6 +16,7 @@ import { twMerge } from "tailwind-merge";
 import ThemeToggle from "./components/ThemeToggle";
 import { APP_MODULES, TabId } from "./registry";
 import { registerTabNavigation } from "./tabNav";
+import { readLocalSettings } from "./lib/settingsApi";
 
 /**
  * Utility function to merge Tailwind classes safely.
@@ -34,14 +35,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const savedSettings = localStorage.getItem("finance_hub_settings");
-    if (savedSettings) {
-      try {
-        const { name } = JSON.parse(savedSettings);
-        if (name) setUserName(name);
-      } catch (e) {
-        console.error("Failed to parse settings", e);
-      }
+    const local = readLocalSettings();
+    if (local.profile.userName) {
+      setUserName(local.profile.userName);
     }
   }, [activeTab]);
 

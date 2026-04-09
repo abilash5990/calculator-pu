@@ -8,6 +8,8 @@ import {
   FileSpreadsheet,
   AlertCircle,
   Send,
+  PlusCircle,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   Area,
@@ -21,6 +23,13 @@ import { formatInr } from "../lib/formatCurrency";
 import { goToTab } from "../tabNav";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import {
+  type AppSettings,
+  type SettingsStatus,
+  defaultAppSettings,
+  fetchSettings,
+  syncNow,
+} from "../lib/settingsApi";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -107,6 +116,15 @@ export default function Dashboard() {
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [controlSettings, setControlSettings] = useState<AppSettings>(defaultAppSettings());
+  const [settingsStatus, setSettingsStatus] = useState<SettingsStatus>({
+    googleSheetsStatus: "not_connected",
+    telegramStatus: "not_connected",
+    lastSheetsReadAt: null,
+    sheetsError: null,
+  });
+  const [controlError, setControlError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -129,6 +147,21 @@ export default function Dashboard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const loadControlCenter = useCallback(async () => {
+    const res = await fetchSettings();
+    setControlSettings(res.settings);
+    setSettingsStatus(res.status);
+    if (!res.ok) {
+      setControlError(res.error ?? res.message);
+    } else {
+      setControlError(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadControlCenter();
+  }, [loadControlCenter]);
 
   const chartData = useMemo(() => {
     if (!data?.chartSeries?.length) return [];
@@ -174,6 +207,37 @@ export default function Dashboard() {
     }
     return { label: "Not connected", variant: "warning" as const };
   }, [data]);
+
+  const controlSheetsChip = useMemo(() => {
+    if (settingsStatus.googleSheetsStatus === "connected") {
+      return { label: "Connected", variant: "success" as const };
+    }
+    if (settingsStatus.googleSheetsStatus === "error") {
+      return { label: "Error", variant: "danger" as const };
+    }
+    return { label: "Not connected", variant: "warning" as const };
+  }, [settingsStatus.googleSheetsStatus]);
+
+  const controlTelegramChip = useMemo(() => {
+    return settingsStatus.telegramStatus === "connected"
+      ? { label: "Connected", variant: "success" as const }
+      : { label: "Not connected", variant: "warning" as const };
+  }, [settingsStatus.telegramStatus]);
+
+  const handleSyncNow = useCallback(async () => {
+    setSyncing(true);
+    setControlError(null);
+    try {
+      const result = await syncNow();
+      setControlSettings(result.settings);
+      setSettingsStatus(result.status);
+      await Promise.all([load(), loadControlCenter()]);
+    } catch (e: any) {
+      setControlError(e?.message ?? "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }, [load, loadControlCenter]);
 
   if (loading && !data) {
     return (
@@ -515,6 +579,96 @@ export default function Dashboard() {
               })}
             </div>
           )}
+        </div>
+
+        <div className="glass-card-tertiary rounded-3xl p-5 md:p-6 border border-white/8">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-lg font-semibold">Control Center</h4>
+            <StatusChip
+              label={syncing ? "Syncing..." : "Ready"}
+              variant={syncing ? "info" : "neutral"}
+            />
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+              <div className="text-xs uppercase tracking-widest text-slate-500 font-semibold mb-3">
+                Integrations
+              </div>
+              <div className="space-y-2 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-300">Google Sheets</span>
+                  <StatusChip label={controlSheetsChip.label} variant={controlSheetsChip.variant} />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-300">Telegram</span>
+                  <StatusChip label={controlTelegramChip.label} variant={controlTelegramChip.variant} />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-300">Last sync</span>
+                  <span className="text-xs text-slate-500">
+                    {settingsStatus.lastSheetsReadAt
+                      ? formatRelativeTime(settingsStatus.lastSheetsReadAt)
+                      : "Never"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+              <div className="text-xs uppercase tracking-widest text-slate-500 font-semibold mb-3">
+                Preferences
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <div className="text-slate-500 text-xs">Currency</div>
+                  <div className="text-slate-200 font-medium">{controlSettings.preferences.defaultCurrency}</div>
+                </div>
+                <div>
+                  <div className="text-slate-500 text-xs">Theme</div>
+                  <div className="text-slate-200 font-medium capitalize">{controlSettings.preferences.theme}</div>
+                </div>
+                <div className="col-span-2">
+                  <div className="text-slate-500 text-xs">Default module</div>
+                  <div className="text-slate-200 font-medium">{controlSettings.preferences.defaultModule}</div>
+                </div>
+              </div>
+            </div>
+
+            {controlError && (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                {controlError}
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleSyncNow()}
+                disabled={syncing}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition disabled:opacity-70"
+              >
+                <RefreshCw size={14} className={syncing ? "animate-spin" : ""} />
+                Sync Now
+              </button>
+              <button
+                type="button"
+                onClick={() => goToTab("settings")}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-sm transition"
+              >
+                <SlidersHorizontal size={14} />
+                Open Preferences
+              </button>
+              <button
+                type="button"
+                onClick={() => goToTab("loans")}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-sm transition"
+              >
+                <PlusCircle size={14} />
+                Add Record
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

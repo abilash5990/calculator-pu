@@ -183,6 +183,26 @@ type PlotPurchaseInput = {
   otherExpenses: number;
 };
 
+type ThemePreference = "system" | "dark" | "light";
+
+type AppSettings = {
+  profile: {
+    userName: string;
+  };
+  preferences: {
+    defaultCurrency: "INR" | "USD" | "EUR" | "GBP";
+    theme: ThemePreference;
+    defaultModule: "dashboard" | "it-filing" | "plot-calc" | "loans" | "jewel-loan";
+  };
+  integrations: {
+    googleSheetId: string;
+    autoSyncEnabled: boolean;
+    telegramConfigured: boolean;
+  };
+};
+
+const SETTINGS_FILE_PATH = path.join(process.cwd(), "data", "settings.json");
+
 const PLOT_PURCHASE_HEADERS = [
   "id",
   "area",
@@ -205,6 +225,115 @@ function computePlotPurchase(input: PlotPurchaseInput) {
   const perSqftCost = totalCost / area;
 
   return { totalCost, registrationCost, otherCosts: otherExpenses, perSqftCost };
+}
+
+function defaultSettings(): AppSettings {
+  return {
+    profile: {
+      userName: "Finance Hub User",
+    },
+    preferences: {
+      defaultCurrency: "INR",
+      theme: "system",
+      defaultModule: "dashboard",
+    },
+    integrations: {
+      googleSheetId: "",
+      autoSyncEnabled: true,
+      telegramConfigured: false,
+    },
+  };
+}
+
+function sanitizeSettings(input: unknown, base?: AppSettings): AppSettings {
+  const seed = base ?? defaultSettings();
+  const raw = (input ?? {}) as Record<string, any>;
+  const profile = (raw.profile ?? {}) as Record<string, any>;
+  const preferences = (raw.preferences ?? {}) as Record<string, any>;
+  const integrations = (raw.integrations ?? {}) as Record<string, any>;
+
+  const currencyRaw = String(preferences.defaultCurrency ?? seed.preferences.defaultCurrency).toUpperCase();
+  const defaultCurrency: AppSettings["preferences"]["defaultCurrency"] =
+    currencyRaw === "USD" || currencyRaw === "EUR" || currencyRaw === "GBP" ? currencyRaw : "INR";
+
+  const themeRaw = String(preferences.theme ?? seed.preferences.theme);
+  const theme: ThemePreference =
+    themeRaw === "dark" || themeRaw === "light" ? themeRaw : "system";
+
+  const moduleRaw = String(preferences.defaultModule ?? seed.preferences.defaultModule);
+  const defaultModule: AppSettings["preferences"]["defaultModule"] =
+    moduleRaw === "it-filing" ||
+    moduleRaw === "plot-calc" ||
+    moduleRaw === "loans" ||
+    moduleRaw === "jewel-loan"
+      ? moduleRaw
+      : "dashboard";
+
+  return {
+    profile: {
+      userName: String(profile.userName ?? seed.profile.userName).trim() || "Finance Hub User",
+    },
+    preferences: {
+      defaultCurrency,
+      theme,
+      defaultModule,
+    },
+    integrations: {
+      googleSheetId: String(integrations.googleSheetId ?? seed.integrations.googleSheetId).trim(),
+      autoSyncEnabled:
+        typeof integrations.autoSyncEnabled === "boolean"
+          ? integrations.autoSyncEnabled
+          : seed.integrations.autoSyncEnabled,
+      telegramConfigured:
+        typeof integrations.telegramConfigured === "boolean"
+          ? integrations.telegramConfigured
+          : seed.integrations.telegramConfigured,
+    },
+  };
+}
+
+function legacySettingsToModern(input: unknown): Partial<AppSettings> {
+  const raw = (input ?? {}) as Record<string, any>;
+  return {
+    profile: {
+      userName: String(raw.userName ?? ""),
+    },
+    preferences: {
+      defaultCurrency: String(raw.defaultCurrency ?? "INR") as AppSettings["preferences"]["defaultCurrency"],
+      theme: "system",
+      defaultModule: "dashboard",
+    },
+    integrations: {
+      googleSheetId: "",
+      autoSyncEnabled: true,
+      telegramConfigured: false,
+    },
+  };
+}
+
+async function readSettingsFromDisk(): Promise<AppSettings> {
+  const defaults = defaultSettings();
+  try {
+    const raw = await fs.readFile(SETTINGS_FILE_PATH, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    const parsedObj = parsed as Record<string, any>;
+    const looksLegacy =
+      parsedObj != null &&
+      typeof parsedObj === "object" &&
+      ("userName" in parsedObj || "defaultCurrency" in parsedObj);
+    if (looksLegacy) {
+      return sanitizeSettings(legacySettingsToModern(parsed), defaults);
+    }
+    return sanitizeSettings(parsed, defaults);
+  } catch {
+    return defaults;
+  }
+}
+
+async function writeSettingsToDisk(settings: AppSettings): Promise<void> {
+  const folder = path.dirname(SETTINGS_FILE_PATH);
+  await fs.mkdir(folder, { recursive: true });
+  await fs.writeFile(SETTINGS_FILE_PATH, JSON.stringify(settings, null, 2), "utf8");
 }
 
 function normalizeSheetId(sheetId: string) {
@@ -469,6 +598,32 @@ async function startServer() {
   let plotTabName: string | null = null;
   let plotInitError: string | null = null;
   let plotInitPromise: Promise<void> | null = null;
+  let appSettings: AppSettings = await readSettingsFromDisk();
+
+  function sheetIdFromSettingsOrEnv() {
+    return normalizeSheetId(
+      String(appSettings.integrations.googleSheetId || process.env.GOOGLE_SHEET_ID || ""),
+    );
+  }
+
+  function resetSheetsInitState() {
+    sheets = null;
+    spreadsheetId = null;
+    sheetsBasePromise = null;
+    sheetsBaseError = null;
+    loanTabName = null;
+    loanInitError = null;
+    loanInitPromise = null;
+    itTabName = null;
+    itInitError = null;
+    itInitPromise = null;
+    jewelTabName = null;
+    jewelInitError = null;
+    jewelInitPromise = null;
+    plotTabName = null;
+    plotInitError = null;
+    plotInitPromise = null;
+  }
 
   async function initSheetsBase() {
     if (sheetsBasePromise) return sheetsBasePromise;
@@ -480,7 +635,7 @@ async function startServer() {
           7000,
           "Timed out creating Google Sheets client",
         );
-        spreadsheetId = normalizeSheetId(process.env.GOOGLE_SHEET_ID ?? "");
+        spreadsheetId = sheetIdFromSettingsOrEnv();
         if (!spreadsheetId) {
           throw new Error("Missing GOOGLE_SHEET_ID in environment");
         }
@@ -779,6 +934,173 @@ async function startServer() {
     records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return records;
   }
+
+  function settingsStatus() {
+    const sheetConnected = Boolean(sheetIdFromSettingsOrEnv());
+    const telegramConnected =
+      Boolean(String(process.env.TELEGRAM_BOT_TOKEN ?? "").trim()) ||
+      appSettings.integrations.telegramConfigured;
+    const googleSheetsStatus =
+      !sheetConnected
+        ? ("not_connected" as const)
+        : sheetsBaseError
+          ? ("error" as const)
+          : ("connected" as const);
+    return {
+      googleSheetsStatus,
+      telegramStatus: telegramConnected ? ("connected" as const) : ("not_connected" as const),
+      lastSheetsReadAt,
+      sheetsError: sheetsBaseError,
+    };
+  }
+
+  apiRouter.get("/settings", (_req, res) => {
+    return res.json({
+      ok: true,
+      message: "Settings loaded",
+      settings: appSettings,
+      status: settingsStatus(),
+      error: null,
+    });
+  });
+
+  apiRouter.put("/settings", async (req, res) => {
+    try {
+      appSettings = sanitizeSettings(req.body, appSettings);
+      await writeSettingsToDisk(appSettings);
+      resetSheetsInitState();
+      return res.json({
+        ok: true,
+        message: "Settings updated",
+        settings: appSettings,
+        status: settingsStatus(),
+        error: null,
+      });
+    } catch (e: any) {
+      return res.status(500).json({
+        ok: false,
+        message: "Failed to update settings",
+        settings: appSettings,
+        status: settingsStatus(),
+        error: e?.message ?? "Internal server error",
+      });
+    }
+  });
+
+  apiRouter.post("/settings/connect-sheets", async (req, res) => {
+    const googleSheetId = normalizeSheetId(String(req.body?.googleSheetId ?? ""));
+    if (!googleSheetId) {
+      return res.status(400).json({
+        ok: false,
+        message: "googleSheetId is required",
+        settings: appSettings,
+        status: settingsStatus(),
+        error: "Missing googleSheetId",
+      });
+    }
+    try {
+      appSettings = sanitizeSettings(
+        {
+          ...appSettings,
+          integrations: {
+            ...appSettings.integrations,
+            googleSheetId,
+          },
+        },
+        appSettings,
+      );
+      await writeSettingsToDisk(appSettings);
+      resetSheetsInitState();
+      await initSheetsBase();
+      return res.json({
+        ok: true,
+        message: sheetsBaseError ? "Connected with warnings" : "Google Sheets connected",
+        settings: appSettings,
+        status: settingsStatus(),
+        error: sheetsBaseError,
+      });
+    } catch (e: any) {
+      return res.status(500).json({
+        ok: false,
+        message: "Failed to connect Google Sheets",
+        settings: appSettings,
+        status: settingsStatus(),
+        error: e?.message ?? "Internal server error",
+      });
+    }
+  });
+
+  apiRouter.post("/settings/connect-telegram", async (req, res) => {
+    try {
+      const configured = Boolean(String(req.body?.token ?? "").trim()) || appSettings.integrations.telegramConfigured;
+      appSettings = sanitizeSettings(
+        {
+          ...appSettings,
+          integrations: {
+            ...appSettings.integrations,
+            telegramConfigured: configured,
+          },
+        },
+        appSettings,
+      );
+      await writeSettingsToDisk(appSettings);
+      return res.json({
+        ok: true,
+        message: configured ? "Telegram status updated" : "Telegram status unchanged",
+        settings: appSettings,
+        status: settingsStatus(),
+        error: null,
+      });
+    } catch (e: any) {
+      return res.status(500).json({
+        ok: false,
+        message: "Failed to update Telegram status",
+        settings: appSettings,
+        status: settingsStatus(),
+        error: e?.message ?? "Internal server error",
+      });
+    }
+  });
+
+  apiRouter.post("/settings/sync", async (_req, res) => {
+    try {
+      await initSheetsBase();
+      if (!sheetIdFromSettingsOrEnv()) {
+        return res.status(400).json({
+          ok: false,
+          message: "Google Sheets is not connected",
+          settings: appSettings,
+          status: settingsStatus(),
+          error: "Missing GOOGLE_SHEET_ID",
+        });
+      }
+
+      const results = await Promise.allSettled([
+        fetchLoanRecordsForDashboard(),
+        fetchITRecordsForDashboard(),
+        fetchJewelRecordsForDashboard(),
+        fetchPlotRecordsForDashboard(),
+      ]);
+
+      const failedCount = results.filter((r) => r.status === "rejected").length;
+      lastSheetsReadAt = new Date().toISOString();
+      return res.json({
+        ok: failedCount < results.length,
+        message: failedCount ? `Sync finished with ${failedCount} module error(s)` : "Sync completed",
+        settings: appSettings,
+        status: settingsStatus(),
+        error: failedCount ? "One or more modules failed during sync" : null,
+      });
+    } catch (e: any) {
+      return res.status(500).json({
+        ok: false,
+        message: "Sync failed",
+        settings: appSettings,
+        status: settingsStatus(),
+        error: e?.message ?? "Internal server error",
+      });
+    }
+  });
 
   apiRouter.get("/dashboard", async (_req, res) => {
     const refreshedAt = new Date().toISOString();

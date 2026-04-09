@@ -1,0 +1,15 @@
+{
+  "profile": {
+    "userName": "Finance Hub User"
+  },
+  "preferences": {
+    "defaultCurrency": "INR",
+    "theme": "system",
+    "defaultModule": "dashboard"
+  },
+  "integrations": {
+    "googleSheetId": "1saTdcOz5L7O65kNoISYOqC2hckGfqTdUBSG8IKvXSdM",
+    "autoSyncEnabled": true,
+    "telegramConfigured": false
+  }
+}
