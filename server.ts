@@ -433,11 +433,36 @@ async function ensureSheetHeaders(
 async function createSheetsClient() {
   const { google } = await import("googleapis");
   const credentialsPath = path.join(process.cwd(), "credentials.json");
-  const credentialsRaw = await fs.readFile(credentialsPath, "utf8");
-  const credentials = JSON.parse(credentialsRaw) as {
-    client_email: string;
-    private_key: string;
-  };
+  let credentials: { client_email: string; private_key: string } | null = null;
+
+  try {
+    const credentialsRaw = await fs.readFile(credentialsPath, "utf8");
+    credentials = JSON.parse(credentialsRaw) as {
+      client_email: string;
+      private_key: string;
+    };
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") {
+      throw e;
+    }
+  }
+
+  if (!credentials) {
+    const clientEmail = String(process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ?? "").trim();
+    const privateKeyRaw = String(process.env.GOOGLE_PRIVATE_KEY ?? "").trim();
+    const privateKey = privateKeyRaw.replace(/\\n/g, "\n");
+
+    if (!clientEmail || !privateKey) {
+      throw new Error(
+        "Google credentials missing: add credentials.json in project root, or set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY in .env",
+      );
+    }
+
+    credentials = {
+      client_email: clientEmail,
+      private_key: privateKey,
+    };
+  }
 
   const auth = new google.auth.JWT({
     email: credentials.client_email,

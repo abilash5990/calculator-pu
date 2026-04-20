@@ -10,6 +10,6 @@
   "integrations": {
     "googleSheetId": "1saTdcOz5L7O65kNoISYOqC2hckGfqTdUBSG8IKvXSdM",
     "autoSyncEnabled": true,
-    "telegramConfigured": false
+    "telegramConfigured": true
   }
 }
