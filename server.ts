@@ -1874,8 +1874,31 @@ async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     console.log("Initializing Vite (first run may take a minute)...");
     try {
+      let vitePlugins: any[] = [];
+      try {
+        const [{ default: react }, { default: tailwindcss }] = await Promise.all([
+          import("@vitejs/plugin-react"),
+          import("@tailwindcss/vite"),
+        ]);
+        vitePlugins = [react(), tailwindcss()];
+      } catch (pluginError) {
+        // On older Node runtimes, plugin imports may fail; keep dev server alive
+        // with a minimal Vite setup so backend APIs remain usable.
+        console.warn(
+          "Vite plugins could not be loaded. Continuing with minimal Vite config.",
+          pluginError,
+        );
+      }
+
       const vite = await createViteServer({
+        configFile: false,
         root: process.cwd(),
+        plugins: vitePlugins,
+        define: {
+          "process.env.GEMINI_API_KEY": JSON.stringify(
+            process.env.GEMINI_API_KEY ?? "",
+          ),
+        },
         server: {
           middlewareMode: true,
           hmr: { server: httpServer },
