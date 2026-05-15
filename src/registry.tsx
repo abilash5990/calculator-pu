@@ -5,6 +5,8 @@ import {
   Gem, 
   PieChart, 
   Settings as SettingsIcon,
+  Bot,
+  FileBarChart,
   LucideIcon
 } from "lucide-react";
 import React from "react";
@@ -16,6 +18,8 @@ const JewelLoan = React.lazy(() => import("./components/JewelLoan"));
 const ITFiling = React.lazy(() => import("./components/ITFiling"));
 const Settings = React.lazy(() => import("./components/Settings"));
 const Dashboard = React.lazy(() => import("./components/Dashboard"));
+const AIAssistant = React.lazy(() => import("./components/AIAssistant"));
+const Reports = React.lazy(() => import("./components/Reports"));
 
 export interface Module {
   id: string;
@@ -65,6 +69,22 @@ export const APP_MODULES: Module[] = [
     icon: Gem,
     component: JewelLoan,
     description: "Calculate gold loan eligibility and interest rates.",
+    isFullWidth: true
+  },
+  {
+    id: "reports",
+    label: "Reports",
+    icon: FileBarChart,
+    component: Reports,
+    description: "Export summaries and download finance reports.",
+    isFullWidth: true
+  },
+  {
+    id: "ai-assistant",
+    label: "AI Assistant",
+    icon: Bot,
+    component: AIAssistant,
+    description: "AI-powered insights, tax tips, and monthly summaries.",
     isFullWidth: true
   },
   {

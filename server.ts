@@ -577,6 +577,336 @@ async function ensureLoanHeaders(sheets: any, spreadsheetId: string, tabName: st
   }
 }
 
+type DashboardActivityKind = "loan" | "it" | "jewel" | "plot" | "system";
+
+type DashboardNotification = {
+  id: string;
+  type: "success" | "warning" | "danger" | "info";
+  title: string;
+  message: string;
+  createdAt: string;
+};
+
+function buildChartSeriesFromDates(dates: string[], dayCount: number): { day: string; count: number }[] {
+  const dayKeys: string[] = [];
+  for (let d = dayCount - 1; d >= 0; d--) {
+    const dt = new Date();
+    dt.setHours(0, 0, 0, 0);
+    dt.setDate(dt.getDate() - d);
+    dayKeys.push(dt.toISOString().slice(0, 10));
+  }
+  const counts = new Map<string, number>();
+  for (const k of dayKeys) counts.set(k, 0);
+  for (const iso of dates) {
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) continue;
+    const key = new Date(t).toISOString().slice(0, 10);
+    if (counts.has(key)) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return dayKeys.map((day) => ({ day, count: counts.get(day) ?? 0 }));
+}
+
+function financialYearLabel(d = new Date()): string {
+  const y = d.getFullYear();
+  if (d.getMonth() >= 3) return `${y}–${String(y + 1).slice(-2)}`;
+  return `${y - 1}–${String(y).slice(-2)}`;
+}
+
+function aggregateDashboardPayload(input: {
+  refreshedAt: string;
+  lastSheetsReadAt: string | null;
+  sheetsConfigured: boolean;
+  sheetsError: string | null;
+  googleSheetsStatus: "synced" | "not_configured" | "error";
+  telegramStatus: "connected" | "not_connected";
+  loans: LoanRecord[];
+  itRecords: ITFilingRecord[];
+  jewelRecords: JewelLoanRecord[];
+  plotRecords: PlotPurchaseRecord[];
+  moduleErrors: Record<string, string>;
+}) {
+  const {
+    refreshedAt,
+    lastSheetsReadAt,
+    sheetsConfigured,
+    sheetsError,
+    googleSheetsStatus,
+    telegramStatus,
+    loans,
+    itRecords,
+    jewelRecords,
+    plotRecords,
+    moduleErrors,
+  } = input;
+
+  const totalLoanPrincipal = loans.reduce((s, l) => s + l.loanAmount, 0);
+  const pendingMonthlyEmi = loans.reduce((s, l) => s + l.emi, 0);
+  const latestIT = itRecords[0];
+  const latestPlot = plotRecords[0];
+  const totalJewelLoanValue = jewelRecords.reduce((s, j) => s + j.loanAmount, 0);
+  const totalPlotInvestment = plotRecords.reduce((s, p) => s + p.totalCost, 0);
+  const totalSavedRecords = loans.length + itRecords.length + jewelRecords.length + plotRecords.length;
+  const totalAssets = totalPlotInvestment + totalJewelLoanValue;
+  const netPosition = totalAssets - totalLoanPrincipal;
+
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+  const allDates = [
+    ...loans.map((l) => l.createdAt),
+    ...itRecords.map((r) => r.createdAt),
+    ...jewelRecords.map((j) => j.createdAt),
+    ...plotRecords.map((p) => p.createdAt),
+  ];
+  const monthActivityCount = allDates.filter((iso) => {
+    const t = Date.parse(iso);
+    return !Number.isNaN(t) && t >= monthStart;
+  }).length;
+
+  const activity: {
+    id: string;
+    kind: DashboardActivityKind;
+    title: string;
+    subtitle: string;
+    createdAt: string;
+  }[] = [];
+
+  if (lastSheetsReadAt && sheetsConfigured) {
+    activity.push({
+      id: "system-sheets-sync",
+      kind: "system",
+      title: "Loan records synced from Google Sheets",
+      subtitle: "Sheet data refreshed successfully",
+      createdAt: lastSheetsReadAt,
+    });
+  }
+  if (telegramStatus === "connected") {
+    activity.push({
+      id: "system-telegram",
+      kind: "system",
+      title: "Telegram bot connected",
+      subtitle: "Alerts and commands are available",
+      createdAt: refreshedAt,
+    });
+  }
+
+  for (const l of loans.slice(0, 20)) {
+    activity.push({
+      id: `loan-${l.id}`,
+      kind: "loan",
+      title: "Loan calculation saved",
+      subtitle: `Principal ${l.loanAmount.toLocaleString("en-IN")} · ${l.tenure}y @ ${l.interestRate}%`,
+      createdAt: l.createdAt,
+    });
+  }
+  for (const r of itRecords.slice(0, 20)) {
+    activity.push({
+      id: `it-${r.id}`,
+      kind: "it",
+      title: "Tax calculation updated",
+      subtitle: `${r.regime === "new" ? "New" : "Old"} regime · tax ${Math.round(r.tax).toLocaleString("en-IN")}`,
+      createdAt: r.createdAt,
+    });
+  }
+  for (const j of jewelRecords.slice(0, 20)) {
+    activity.push({
+      id: `jewel-${j.id}`,
+      kind: "jewel",
+      title: "Jewel loan estimate saved",
+      subtitle: `${j.weight}g · loan ${Math.round(j.loanAmount).toLocaleString("en-IN")}`,
+      createdAt: j.createdAt,
+    });
+  }
+  for (const p of plotRecords.slice(0, 20)) {
+    activity.push({
+      id: `plot-${p.id}`,
+      kind: "plot",
+      title: "New plot valuation added",
+      subtitle: `${p.area} sqft · ${p.rate.toLocaleString("en-IN")}/sqft`,
+      createdAt: p.createdAt,
+    });
+  }
+  activity.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  const recentRecords: {
+    id: string;
+    source: string;
+    label: string;
+    detail: string;
+    amountLabel: string;
+    status: string;
+    updatedAt: string;
+  }[] = [];
+
+  const fmt = (n: number) =>
+    new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
+
+  for (const l of loans.slice(0, 8)) {
+    recentRecords.push({
+      id: `loan-${l.id}`,
+      source: "Loan",
+      label: `Case ${l.id.slice(0, 8)}`,
+      detail: `${l.tenure}y · ${l.interestRate}%`,
+      amountLabel: fmt(l.loanAmount),
+      status: "Saved",
+      updatedAt: l.createdAt,
+    });
+  }
+  for (const r of itRecords.slice(0, 8)) {
+    recentRecords.push({
+      id: `it-${r.id}`,
+      source: "IT Filing",
+      label: r.regime === "new" ? "New regime" : "Old regime",
+      detail: `Income ${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(r.income)}`,
+      amountLabel: fmt(r.tax),
+      status: "Computed",
+      updatedAt: r.createdAt,
+    });
+  }
+  for (const j of jewelRecords.slice(0, 6)) {
+    recentRecords.push({
+      id: `jewel-${j.id}`,
+      source: "Jewel",
+      label: `${j.weight}g @ ${j.purity}K`,
+      detail: `LTV ${j.loanLTV}%`,
+      amountLabel: fmt(j.loanAmount),
+      status: "Saved",
+      updatedAt: j.createdAt,
+    });
+  }
+  for (const p of plotRecords.slice(0, 6)) {
+    recentRecords.push({
+      id: `plot-${p.id}`,
+      source: "Plot",
+      label: `${p.area} sqft`,
+      detail: `Total ${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(p.totalCost)}`,
+      amountLabel: `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(p.rate)}/sqft`,
+      status: "Saved",
+      updatedAt: p.createdAt,
+    });
+  }
+  recentRecords.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+  let healthScore = 42;
+  if (sheetsConfigured && googleSheetsStatus === "synced") healthScore += 18;
+  if (telegramStatus === "connected") healthScore += 10;
+  if (itRecords.length > 0) healthScore += 12;
+  if (loans.length > 0) healthScore += 8;
+  if (plotRecords.length > 0 || jewelRecords.length > 0) healthScore += 10;
+  if (totalSavedRecords === 0) healthScore -= 25;
+  if (Object.keys(moduleErrors).length > 0) healthScore -= 12;
+  healthScore = Math.max(0, Math.min(100, healthScore));
+
+  const insights: string[] = [];
+  if (monthActivityCount === 0 && totalSavedRecords > 0) {
+    insights.push("Your loan activity is low this month.");
+  } else if (monthActivityCount > 0) {
+    insights.push(`${monthActivityCount} financial update(s) this month.`);
+  }
+  if (itRecords.length === 0) insights.push("No major tax records found.");
+  if (itRecords.length === 0) {
+    insights.push("Suggested action: Add IT filing records.");
+  }
+
+  let healthSuggestion = "Keep syncing Google Sheets for up-to-date analytics.";
+  if (itRecords.length === 0) healthSuggestion = "Add latest IT filing data for better accuracy.";
+
+  const notifications: DashboardNotification[] = [];
+  if (googleSheetsStatus === "synced") {
+    notifications.push({
+      id: "n-sheets-ok",
+      type: "success",
+      title: "Google Sheets sync completed",
+      message: "Your sheet data is up to date.",
+      createdAt: lastSheetsReadAt ?? refreshedAt,
+    });
+  } else if (googleSheetsStatus === "not_configured") {
+    notifications.push({
+      id: "n-sheets-missing",
+      type: "warning",
+      title: "Google Sheets not connected",
+      message: "Connect a sheet in Settings to sync records.",
+      createdAt: refreshedAt,
+    });
+  }
+  if (telegramStatus === "connected") {
+    notifications.push({
+      id: "n-telegram",
+      type: "info",
+      title: "Telegram bot is active",
+      message: "Alerts are available for new records.",
+      createdAt: refreshedAt,
+    });
+  }
+  if (itRecords.length === 0) {
+    notifications.push({
+      id: "n-tax-missing",
+      type: "warning",
+      title: "No tax record found for this month",
+      message: "Add an IT filing estimate to improve tax KPIs.",
+      createdAt: refreshedAt,
+    });
+  }
+  if (loans.length === 0 && sheetsConfigured) {
+    notifications.push({
+      id: "n-loan-data",
+      type: "info",
+      title: "Loan analytics needs data",
+      message: "Save a loan calculation to unlock insights.",
+      createdAt: refreshedAt,
+    });
+  }
+  for (const [mod, msg] of Object.entries(moduleErrors)) {
+    notifications.push({
+      id: `n-err-${mod}`,
+      type: "danger",
+      title: `${mod} module error`,
+      message: msg,
+      createdAt: refreshedAt,
+    });
+  }
+
+  return {
+    refreshedAt,
+    lastSheetsReadAt,
+    sheetsConfigured,
+    sheetsError,
+    googleSheetsStatus,
+    telegramStatus,
+    financialYear: financialYearLabel(),
+    kpis: {
+      totalLoanPrincipal,
+      activeLoanCases: loans.length,
+      monthlyTaxEstimate: latestIT?.monthlyTax ?? null,
+      plotRatePerSqft: latestPlot?.rate ?? null,
+      estimatedTaxFromLatestIT: latestIT?.tax ?? null,
+      totalJewelLoanValue,
+      totalPlotInvestment,
+      totalSavedRecords,
+      monthActivityCount,
+      pendingMonthlyEmi,
+      totalAssets,
+      netPosition,
+    },
+    health: {
+      score: healthScore,
+      status: healthScore >= 75 ? "Stable" : healthScore >= 50 ? "Fair" : "Needs attention",
+      risk: healthScore >= 75 ? "Low" : healthScore >= 50 ? "Medium" : "High",
+      suggestion: healthSuggestion,
+    },
+    insights,
+    chartSeries: buildChartSeriesFromDates(allDates, 7),
+    chartSeries30d: buildChartSeriesFromDates(allDates, 30),
+    assetBreakdown: [
+      { name: "Plot", value: Math.round(totalPlotInvestment) },
+      { name: "Jewel", value: Math.round(totalJewelLoanValue) },
+      { name: "Loans", value: Math.round(totalLoanPrincipal) },
+    ].filter((x) => x.value > 0),
+    activity: activity.slice(0, 15),
+    recentRecords: recentRecords.slice(0, 14),
+    notifications,
+    moduleErrors,
+  };
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -1127,6 +1457,42 @@ async function startServer() {
     }
   });
 
+  apiRouter.post("/ai/insight", async (req, res) => {
+    const body = req.body ?? {};
+    const prompt = String(body.prompt ?? "Summarize my financial status.");
+    const context = body.context ?? {};
+    const fallback = String(body.fallback ?? "").trim();
+    const apiKey = String(process.env.GEMINI_API_KEY ?? "").trim();
+
+    if (!apiKey) {
+      return res.json({
+        ok: true,
+        source: "rules",
+        text: fallback || "Add GEMINI_API_KEY for AI insights. Dashboard KPIs still work offline.",
+      });
+    }
+
+    try {
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `You are FinanceHub, a concise Indian personal finance assistant. Max 4 sentences, plain text.\n\nRequest: ${prompt}\n\nContext:\n${JSON.stringify(context)}`,
+      });
+      return res.json({
+        ok: true,
+        source: "gemini",
+        text: String(response.text ?? "").trim() || fallback || "No insight generated.",
+      });
+    } catch (e: any) {
+      return res.json({
+        ok: true,
+        source: "rules",
+        text: fallback || e?.message || "AI unavailable.",
+      });
+    }
+  });
+
   apiRouter.get("/dashboard", async (_req, res) => {
     const refreshedAt = new Date().toISOString();
     const telegramConnected = Boolean(String(process.env.TELEGRAM_BOT_TOKEN ?? "").trim());
@@ -1135,39 +1501,22 @@ async function startServer() {
       await initSheetsBase();
 
       if (!spreadsheetId || sheetsBaseError) {
-        return res.json({
-          refreshedAt,
-          lastSheetsReadAt,
-          sheetsConfigured: false,
-          sheetsError: sheetsBaseError ?? (spreadsheetId ? null : "Missing GOOGLE_SHEET_ID in environment"),
-          googleSheetsStatus: "not_configured" as const,
-          telegramStatus: telegramConnected ? ("connected" as const) : ("not_connected" as const),
-          kpis: {
-            totalLoanPrincipal: 0,
-            activeLoanCases: 0,
-            monthlyTaxEstimate: null as number | null,
-            plotRatePerSqft: null as number | null,
-            estimatedTaxFromLatestIT: null as number | null,
-          },
-          chartSeries: [] as { day: string; count: number }[],
-          activity: [] as {
-            id: string;
-            kind: "loan" | "it" | "jewel" | "plot";
-            title: string;
-            subtitle: string;
-            createdAt: string;
-          }[],
-          recentRecords: [] as {
-            id: string;
-            source: string;
-            label: string;
-            detail: string;
-            amountLabel: string;
-            status: string;
-            updatedAt: string;
-          }[],
-          moduleErrors: {} as Record<string, string>,
-        });
+        return res.json(
+          aggregateDashboardPayload({
+            refreshedAt,
+            lastSheetsReadAt,
+            sheetsConfigured: false,
+            sheetsError:
+              sheetsBaseError ?? (spreadsheetId ? null : "Missing GOOGLE_SHEET_ID in environment"),
+            googleSheetsStatus: "not_configured",
+            telegramStatus: telegramConnected ? "connected" : "not_connected",
+            loans: [],
+            itRecords: [],
+            jewelRecords: [],
+            plotRecords: [],
+            moduleErrors: {},
+          }),
+        );
       }
 
       let loans: LoanRecord[] = [];
@@ -1198,180 +1547,24 @@ async function startServer() {
 
       lastSheetsReadAt = refreshedAt;
 
-      const totalLoanPrincipal = loans.reduce((s, l) => s + l.loanAmount, 0);
-      const activeLoanCases = loans.length;
-      const latestIT = itRecords[0];
-      const monthlyTaxEstimate = latestIT != null ? latestIT.monthlyTax : null;
-      const estimatedTaxFromLatestIT = latestIT != null ? latestIT.tax : null;
-      const latestPlot = plotRecords[0];
-      const plotRatePerSqft = latestPlot != null ? latestPlot.rate : null;
-
-      const activity: {
-        id: string;
-        kind: "loan" | "it" | "jewel" | "plot";
-        title: string;
-        subtitle: string;
-        createdAt: string;
-      }[] = [];
-
-      for (const l of loans.slice(0, 20)) {
-        activity.push({
-          id: `loan-${l.id}`,
-          kind: "loan",
-          title: "Loan calculation saved",
-          subtitle: `Principal ${l.loanAmount.toLocaleString("en-IN")} · ${l.tenure}y @ ${l.interestRate}%`,
-          createdAt: l.createdAt,
-        });
-      }
-      for (const r of itRecords.slice(0, 20)) {
-        activity.push({
-          id: `it-${r.id}`,
-          kind: "it",
-          title: "IT filing estimate saved",
-          subtitle: `${r.regime === "new" ? "New" : "Old"} regime · tax ${Math.round(r.tax).toLocaleString("en-IN")}`,
-          createdAt: r.createdAt,
-        });
-      }
-      for (const j of jewelRecords.slice(0, 20)) {
-        activity.push({
-          id: `jewel-${j.id}`,
-          kind: "jewel",
-          title: "Jewel loan calculation saved",
-          subtitle: `${j.weight}g · loan ${Math.round(j.loanAmount).toLocaleString("en-IN")}`,
-          createdAt: j.createdAt,
-        });
-      }
-      for (const p of plotRecords.slice(0, 20)) {
-        activity.push({
-          id: `plot-${p.id}`,
-          kind: "plot",
-          title: "Plot valuation saved",
-          subtitle: `${p.area} sqft · ${p.rate.toLocaleString("en-IN")}/sqft`,
-          createdAt: p.createdAt,
-        });
-      }
-
-      activity.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      const activityTop = activity.slice(0, 12);
-
-      const dayKeys: string[] = [];
-      for (let d = 6; d >= 0; d--) {
-        const dt = new Date();
-        dt.setHours(0, 0, 0, 0);
-        dt.setDate(dt.getDate() - d);
-        dayKeys.push(dt.toISOString().slice(0, 10));
-      }
-      const counts = new Map<string, number>();
-      for (const k of dayKeys) counts.set(k, 0);
-
-      function bumpDay(iso: string) {
-        const t = Date.parse(iso);
-        if (Number.isNaN(t)) return;
-        const key = new Date(t).toISOString().slice(0, 10);
-        if (counts.has(key)) counts.set(key, (counts.get(key) ?? 0) + 1);
-      }
-
-      for (const l of loans) bumpDay(l.createdAt);
-      for (const r of itRecords) bumpDay(r.createdAt);
-      for (const j of jewelRecords) bumpDay(j.createdAt);
-      for (const p of plotRecords) bumpDay(p.createdAt);
-
-      const chartSeries = dayKeys.map((day) => ({
-        day,
-        count: counts.get(day) ?? 0,
-      }));
-
-      const recentRecords: {
-        id: string;
-        source: string;
-        label: string;
-        detail: string;
-        amountLabel: string;
-        status: string;
-        updatedAt: string;
-      }[] = [];
-
-      for (const l of loans.slice(0, 8)) {
-        recentRecords.push({
-          id: `loan-${l.id}`,
-          source: "Loan",
-          label: `Case ${l.id.slice(0, 8)}`,
-          detail: `${l.tenure}y · ${l.interestRate}%`,
-          amountLabel: new Intl.NumberFormat("en-IN", {
-            style: "currency",
-            currency: "INR",
-            maximumFractionDigits: 0,
-          }).format(l.loanAmount),
-          status: "Saved",
-          updatedAt: l.createdAt,
-        });
-      }
-      for (const r of itRecords.slice(0, 8)) {
-        recentRecords.push({
-          id: `it-${r.id}`,
-          source: "IT Filing",
-          label: r.regime === "new" ? "New regime" : "Old regime",
-          detail: `Income ${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(r.income)}`,
-          amountLabel: new Intl.NumberFormat("en-IN", {
-            style: "currency",
-            currency: "INR",
-            maximumFractionDigits: 0,
-          }).format(r.tax),
-          status: "Computed",
-          updatedAt: r.createdAt,
-        });
-      }
-      for (const j of jewelRecords.slice(0, 6)) {
-        recentRecords.push({
-          id: `jewel-${j.id}`,
-          source: "Jewel",
-          label: `${j.weight}g @ ${j.purity}K`,
-          detail: `LTV ${j.loanLTV}%`,
-          amountLabel: new Intl.NumberFormat("en-IN", {
-            style: "currency",
-            currency: "INR",
-            maximumFractionDigits: 0,
-          }).format(j.loanAmount),
-          status: "Saved",
-          updatedAt: j.createdAt,
-        });
-      }
-      for (const p of plotRecords.slice(0, 6)) {
-        recentRecords.push({
-          id: `plot-${p.id}`,
-          source: "Plot",
-          label: `${p.area} sqft`,
-          detail: `Total ${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(p.totalCost)}`,
-          amountLabel: `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(p.rate)}/sqft`,
-          status: "Saved",
-          updatedAt: p.createdAt,
-        });
-      }
-
-      recentRecords.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-
       const googleSheetsStatus =
         Object.keys(moduleErrors).length >= 4 ? ("error" as const) : ("synced" as const);
 
-      return res.json({
-        refreshedAt,
-        lastSheetsReadAt,
-        sheetsConfigured: true,
-        sheetsError: null as string | null,
-        googleSheetsStatus,
-        telegramStatus: telegramConnected ? ("connected" as const) : ("not_connected" as const),
-        kpis: {
-          totalLoanPrincipal,
-          activeLoanCases,
-          monthlyTaxEstimate,
-          plotRatePerSqft,
-          estimatedTaxFromLatestIT,
-        },
-        chartSeries,
-        activity: activityTop,
-        recentRecords: recentRecords.slice(0, 14),
-        moduleErrors,
-      });
+      return res.json(
+        aggregateDashboardPayload({
+          refreshedAt,
+          lastSheetsReadAt,
+          sheetsConfigured: true,
+          sheetsError: null,
+          googleSheetsStatus,
+          telegramStatus: telegramConnected ? "connected" : "not_connected",
+          loans,
+          itRecords,
+          jewelRecords,
+          plotRecords,
+          moduleErrors,
+        }),
+      );
     } catch (e: any) {
       console.error("Dashboard aggregate failed:", e);
       return res.status(500).json({
